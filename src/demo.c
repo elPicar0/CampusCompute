@@ -1,109 +1,62 @@
-#include "../include/demo.h"
-
 #include <stdio.h>
 
-#include "../include/banker.h"
-#include "../include/ipc.h"
-#include "../include/jobio.h"
-#include "../include/limits.h"
-#include "../include/logger.h"
-#include "../include/scheduler.h"
-#include "../include/util.h"
-#include "../include/verify.h"
-#include "../include/worker.h"
+#include "../include/campus.h"
 
-#define MAIN_LOG "logs/campus.log"
 #define MAX_STAGES 12
+#define DEMO_QUANTUM 2
 
-typedef struct {
-  const char* name;
-  int passed;
-} StageResult;
+static const char* stageName[MAX_STAGES];
+static int stagePassed[MAX_STAGES];
+static int stageCount = 0;
 
-static StageResult stages[MAX_STAGES];
-static int stageCount;
-
-static void record(const char* name, int ok, Logger* lg) {
-  stages[stageCount++] = (StageResult){name, ok};
-  loggerLog(lg, "DEMO", "stage '%s': %s", name, ok ? "PASS" : "FAIL");
+static void record(const char* name, int rc) {
+  stageName[stageCount] = name;
+  stagePassed[stageCount] = (rc == 0);
+  stageCount++;
 }
 
-int runIntegratedDemo(void) {
+// runs every feature in order and prints a PASS/FAIL summary (S21)
+int runDemo(void) {
   stageCount = 0;
-  if (ensureDir("logs") != 0) return -1;
+  printf("\n=== CampusCompute integrated demonstration ===\n");
 
-  printBanner("CampusCompute integrated demonstration");
-  Logger* lg = loggerOpen(MAIN_LOG, 8, 0, 0);
-  if (lg == NULL) return -1;
-  loggerLog(lg, "DEMO", "integrated demonstration started");
+  printf("\n>>> Stage 1: job management and CPU scheduling\n");
+  int rc = loadDefaultJobs();
+  displayJob();
+  rc |= fcfs();
+  rc |= roundRobin(DEMO_QUANTUM);
+  rc |= prioritySched();
+  rc |= compareSchedulers(DEMO_QUANTUM);
+  record("job management and scheduling (FCFS, Round Robin, Priority, comparison)", rc);
 
-  /* 1. job management + scheduling */
-  Job jobs[MAX_JOBS];
-  int n = defaultJobs(jobs, MAX_JOBS);
-  printf("\nStage 1: job management and CPU scheduling\n");
-  printJobTable(jobs, n);
-  int ok = 1;
-  for (int p = POLICY_FCFS; p <= POLICY_PRIORITY; p++) {
-    ok &= (reportPolicy((Policy)p, jobs, n, DEFAULT_QUANTUM) == 0);
-    loggerLog(lg, "SCHED", "%s simulated for %d jobs", policyName((Policy)p), n);
-  }
-  ok &= (comparePolicies(jobs, n, DEFAULT_QUANTUM) == 0);
-  record("job scheduling (FCFS, RR, Priority, comparison)", ok, lg);
+  printf("\n>>> Stage 2: concurrent activity logger\n");
+  record("producer-consumer logger (pthreads, mutex, condition variables)", runLogger());
 
-  /* 2. concurrent logger with several producer threads */
-  printBanner("Stage 2: concurrent producer-consumer logger");
-  ok = (runLoggerDemo(3, 4, 3, "logs/logger_demo.log") == 0);
-  record("concurrent logger (pthreads, mutex, condition variables)", ok, lg);
+  printf("\n>>> Stage 3: shared-memory IPC with a named semaphore\n");
+  record("shared-memory IPC and semaphore cleanup", runIPC());
 
-  /* 3. shared memory + named semaphores, carrying real FCFS results */
-  printBanner("Stage 3: shared-memory IPC with named semaphores");
-  Job out[MAX_JOBS];
-  Timeline t;
-  timelineInit(&t);
-  int values[MAX_JOBS];
-  ok = (simulate(POLICY_FCFS, jobs, n, DEFAULT_QUANTUM, out, &t) == 0);
-  timelineFree(&t);
-  for (int i = 0; ok && i < n; i++) values[i] = out[i].tat;
-  ok = ok && (runIpcDemo(values, n, lg) == 0);
-  record("shared-memory IPC and semaphore cleanup", ok, lg);
+  printf("\n>>> Stage 4: Banker's algorithm\n");
+  rc = banker_algo_success();
+  rc |= banker_algo_deadlock();
+  record("Banker's: safe state accepted, unsafe state detected", rc);
 
-  /* 4. Banker's algorithm: one safe and one unsafe state */
-  printBanner("Stage 4: Banker's algorithm");
-  BankerState s;
-  bankerSampleSafe(&s);
-  int safe = bankerAnalyze(&s, "sample SAFE state", lg);
-  bankerSampleUnsafe(&s);
-  int unsafe = bankerAnalyze(&s, "sample UNSAFE state", lg);
-  record("Banker's: safe state accepted, unsafe state detected", safe == 1 && unsafe == 0, lg);
+  printf("\n>>> Stage 5: worker processes\n");
+  rc = success();
+  rc |= failure();
+  record("workers: normal exit and simulated failure detected", rc);
 
-  /* 5. worker processes */
-  printBanner("Stage 5: worker processes (fork/waitpid)");
-  ok = (runWorkerPool(lg) == 0);
-  record("worker pool: normal exits and simulated failures detected", ok, lg);
+  printf("\n>>> Stage 6: resource limits and cleanup\n");
+  record("resource limits (RLIMIT_CPU, RLIMIT_AS) and file cleanup", run_resource_demo());
 
-  /* 6. resource limits */
-  printBanner("Stage 6: resource limits (setrlimit)");
-  ok = (runLimitDemo(LIMIT_NOFILE, lg) == 0);
-  ok &= (runLimitDemo(LIMIT_MEM, lg) == 0);
-  ok &= (runLimitDemo(LIMIT_CPU, lg) == 0);
-  record("resource limits: RLIMIT_NOFILE, RLIMIT_AS, RLIMIT_CPU", ok, lg);
+  printf("\n>>> Stage 7: cleanup verification\n");
+  record("no threads, children, files or IPC objects left behind", verify_cleanup());
 
-  loggerLog(lg, "DEMO", "all stages executed, closing logger");
-  int logOk = (loggerClose(lg) == 0);          /* joins the consumer thread */
-  int lines = countLines(MAIN_LOG);
-  printf("\nMain log '%s' written: %d entries\n", MAIN_LOG, lines);
-  record("logger flushed and consumer thread joined", logOk && lines > 0, NULL);
-
-  /* 7. cleanup verification, after the logger thread is gone */
-  ok = (verifyCleanup() == 0);
-  record("cleanup: no threads, children or IPC objects left", ok, NULL);
-
-  printBanner("INTEGRATED SUMMARY");
+  printf("\n=== INTEGRATED SUMMARY ===\n");
   int failed = 0;
   for (int i = 0; i < stageCount; i++) {
-    printf("[%s] %s\n", stages[i].passed ? "PASS" : "FAIL", stages[i].name);
-    if (!stages[i].passed) failed++;
+    printf("[%s] %s\n", stagePassed[i] ? "PASS" : "FAIL", stageName[i]);
+    if (!stagePassed[i]) failed++;
   }
-  printf("\n%d of %d stages passed. Log file: %s\n", stageCount - failed, stageCount, MAIN_LOG);
-  return failed == 0 ? 0 : -1;
+  printf("\n%d of %d stages passed. Log file: campus.log\n", stageCount - failed, stageCount);
+  return failed == 0 ? 0 : 1;
 }

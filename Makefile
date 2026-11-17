@@ -1,32 +1,46 @@
-CC      ?= gcc
-CFLAGS  := -std=gnu11 -Wall -Wextra -Wpedantic -g -O1 -pthread -Iinclude
+CC      := gcc
+CFLAGS  := -Wall -Wextra -g -Iinclude
 LDFLAGS := -pthread
-LDLIBS  := -lrt
 
-SRCS := $(wildcard src/*.c)
-OBJS := $(SRCS:src/%.c=build/%.o)
-BIN  := campus
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+    LDFLAGS += -lrt
+endif
 
-.PHONY: all clean test cleanup-ipc
+SRC_DIR := src
+INC_DIR := include
+OBJ_DIR := build
+TARGET  := campus_os
 
-all: $(BIN)
+SRCS := $(wildcard $(SRC_DIR)/*.c)
+HDRS := $(wildcard $(INC_DIR)/*.h)
+OBJS := $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SRCS))
 
-$(BIN): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
+.PHONY: all clean run test
 
-build/%.o: src/%.c | build
-	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+all: $(TARGET)
 
-build:
-	mkdir -p build
+$(TARGET): $(OBJS)
+	$(CC) $(OBJS) -o $@ $(LDFLAGS)
 
-test: $(BIN)
+# only main.c keeps its main(); every other module's standalone main() is renamed
+# so each file can still be compiled and tested on its own
+$(OBJ_DIR)/main.o: $(SRC_DIR)/main.c $(HDRS) | $(OBJ_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c $(HDRS) | $(OBJ_DIR)
+	$(CC) $(CFLAGS) -Dmain=module_main_$* -c $< -o $@
+
+$(OBJ_DIR):
+	mkdir -p $(OBJ_DIR)
+
+run: $(TARGET)
+	./$(TARGET)
+
+# automated checks (tests/run_tests.sh)
+test: $(TARGET)
 	./tests/run_tests.sh
 
-cleanup-ipc: $(BIN)
-	./$(BIN) cleanup
-
+# removes build output, the executable and generated files (not anyone's IPC objects)
 clean:
-	rm -rf build $(BIN) logs
-
--include $(OBJS:.o=.d)
+	rm -rf $(OBJ_DIR) $(TARGET) temp_worker.log campus.log

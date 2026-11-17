@@ -1,30 +1,40 @@
 #ifndef JOB_H
 #define JOB_H
 
-#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-#define MAX_JOBS 64
+#define READY 0
+#define RUNNING 1
+#define COMPLETED 2
+
+#define MAX_JOBS 100
 #define MAX_TIME_VALUE 100000
-
-/* Process lifecycle of a simulated job (FR1). */
-typedef enum { JOB_NEW, JOB_READY, JOB_RUNNING, JOB_DONE } JobStatus;
+#define MAX_SLICES 4096
+#define IDLE_ID (-1)
 
 typedef struct {
-  int jobID;
-  int arrivalTime;
-  int burstTime;
-  int priority;        /* lower number = higher priority */
-  JobStatus status;
-  int remaining;       /* used by Round Robin */
-  int completion;      /* completion time (CT) */
-  int tat;             /* turnaround = CT - arrival */
-  int wt;              /* waiting    = TAT - burst */
+  int id;
+  int arrival;
+  int burst;
+  int priority;      // lower number = higher priority
+  int remaining;
+  int completion;
+  int status;
+  int totTime;       // turnaround time
+  int waitTime;
 } Job;
 
-const char* jobStatusName(JobStatus s);
+typedef struct Node {
+  int index;
+  struct Node* next;
+} Node;
 
-/* Return 0 if valid, -1 otherwise (reason copied into err). */
-int validateJob(const Job* j, char* err, size_t errLen);
-int validateJobSet(const Job* jobs, int n, char* err, size_t errLen);
+// one contiguous run of the CPU (id == IDLE_ID means the CPU was idle)
+typedef struct {
+  int id;
+  int start;
+  int end;
+} Slice;
 
 #endif
